@@ -1,0 +1,51 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LibMediaplayer.Windows", "LibMediaplayer.Windows\LibMediaplayer.Windows.csproj", "{69705CB0-B86C-427A-91E8-BAC3B1465996}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestMediaPlayer.Console", "TestMediaPlayer.Console\TestMediaPlayer.Console.csproj", "{9EB3F010-49E0-4EE9-A495-EC8B50F88703}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestMediaPlayer.WinForm", "TestMediaplayer.WinForm\TestMediaPlayer.WinForm.csproj", "{B4F45A92-F2CD-4564-B98F-5B463F7AD21C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LibRTMP.NET.Windows", "LibRTMP.NET.Windows\LibRTMP.NET.Windows.csproj", "{D0CB3C76-A219-4964-8DFA-55FB968754EE}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Libs.External", "Libs.External", "{293BE774-C9CB-486A-9CD5-B6B0AE4C60F5}"
+	ProjectSection(SolutionItems) = preProject
+		Libs.External\bass.dll = Libs.External\bass.dll
+		Libs.External\Bass.Net.dll = Libs.External\Bass.Net.dll
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Documentation", "Documentation", "{64FEFA43-93C3-4781-A9C7-3EE1904C6C00}"
+	ProjectSection(SolutionItems) = preProject
+		Documentation\gpl-2.0.txt = Documentation\gpl-2.0.txt
+		Documentation\gpl-3.0.txt = Documentation\gpl-3.0.txt
+		Documentation\Readme.txt = Documentation\Readme.txt
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{69705CB0-B86C-427A-91E8-BAC3B1465996}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{69705CB0-B86C-427A-91E8-BAC3B1465996}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{69705CB0-B86C-427A-91E8-BAC3B1465996}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{69705CB0-B86C-427A-91E8-BAC3B1465996}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9EB3F010-49E0-4EE9-A495-EC8B50F88703}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9EB3F010-49E0-4EE9-A495-EC8B50F88703}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9EB3F010-49E0-4EE9-A495-EC8B50F88703}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9EB3F010-49E0-4EE9-A495-EC8B50F88703}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B4F45A92-F2CD-4564-B98F-5B463F7AD21C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B4F45A92-F2CD-4564-B98F-5B463F7AD21C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B4F45A92-F2CD-4564-B98F-5B463F7AD21C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B4F45A92-F2CD-4564-B98F-5B463F7AD21C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
