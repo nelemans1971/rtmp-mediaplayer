@@ -1,4 +1,7 @@
-﻿LibRTMP
+﻿rtmp-mediaplayer v 1.05
+=======================
+
+LibRTMP
 -------
 LibRTMP is an open source C# api to connect to an rtmp server. It's mainly
 geared toward streaming audio, although an event is exposed for video (but not
@@ -105,3 +108,13 @@ The examples use the 32-bit dll version of bass. This means you must force the c
 version to be x86.
 If you create a new project don't forget to set the platfrom target to x86,
 otherwhise you get an error when running your project.
+
+
+v1.00
+Initial version
+
+v1.05
+Fix for Red5 media server, vod should work now.
+Packet sync when paused detected, fixed.
+Stabilization fixes.
+Lots of other small bug fixes.
