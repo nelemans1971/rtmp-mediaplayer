@@ -109,12 +109,19 @@ version to be x86.
 If you create a new project don't forget to set the platfrom target to x86,
 otherwhise you get an error when running your project.
 
+libzplay
+--------
+The Red5Test example uses the lizplay library to play music, using the "LibRTMP.NET.Windows"
+See http://libzplay.sourceforge.net/ for more info on libzplay
+This is a very basic example, I used to test Red5 server and as an example
+how to use the LibRTMP.NET library.
 
 v1.00
 Initial version
 
 v1.05
 Fix for Red5 media server, vod should work now.
+Added demo app Red5Test which plays music using libzplay library (http://libzplay.sourceforge.net/)
 Packet sync when paused detected, fixed.
 Stabilization fixes.
 Lots of other small bug fixes.
