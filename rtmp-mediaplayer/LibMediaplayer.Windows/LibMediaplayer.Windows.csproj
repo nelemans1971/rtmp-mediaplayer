@@ -45,6 +45,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CircularBlockBuffer.cs" />
+    <Compile Include="LibRTMP.Logger.cs" />
     <Compile Include="MediaItem.cs" />
     <Compile Include="MediaItemMetaData.cs" />
     <Compile Include="Mediaplayer.cs" />
