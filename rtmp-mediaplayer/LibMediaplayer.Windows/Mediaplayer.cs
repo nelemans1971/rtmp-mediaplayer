@@ -58,6 +58,7 @@ namespace CDR.LibRTMP.Media
         protected int MP3_BITRATE = 128; // 128 kilobits per seconds
 
         private const int AUTO_RECONNECT_IN_SECONDS = 5;
+        private int PREVIOUS_CMD_IS_GOTOBEGIN_IN_SEC = 10; // after 10 seconds previous means start playing previous else it means goto previous mediafile
 
         private string email = string.Empty;
         private string registrationKey = string.Empty;
@@ -78,6 +79,7 @@ namespace CDR.LibRTMP.Media
         private List<Playlist> playlists;
         private Playlist currentPlaylist;
         private PlaylistRepeatMode repeatMode = PlaylistRepeatMode.RepeatNone;
+        private int disablePlaylistChangeEvent = 0;
 
         protected MediaplayerState mediaplayerState = MediaplayerState.Disconnected;
 
@@ -91,7 +93,9 @@ namespace CDR.LibRTMP.Media
         protected DateTime dtLastAutoReconnect = DateTime.MaxValue;
         protected bool lastConnectFailed = false;
         protected NetConnection netConnection = null;
+        protected bool netConnectionReady = false;
         protected List<NetStreamHelper> netStreams = null;
+        protected int failedPlayCount = 0;
         private bool commandInProgress = false;
         private double audioInBassBuffer = 0.0; // number of seconds of audio data in bass buffer
         private double lastPosition = 0.0;
@@ -107,6 +111,11 @@ namespace CDR.LibRTMP.Media
         /// Fired when we lose the connection to the RTMP media server
         /// </summary>
         public event MP_OnServer OnServerDisconnect = null;
+
+        /// <summary>
+        /// Fired when the Current medialist has changed
+        /// </summary>
+        public event PL_OnPlaylistChanged OnPlaylistChanged = null;
 
         /// <summary>
         /// Fired when the Current MediaItem changes
@@ -179,8 +188,10 @@ namespace CDR.LibRTMP.Media
             currentPlaylist = new Playlist();
             playlists.Add(currentPlaylist);
             netStreams = new List<NetStreamHelper>();
+            failedPlayCount = 0;
 
             // Link event so we can expose them to the "MediaPlayer" user
+            currentPlaylist.OnPlaylistChanged += new PL_OnPlaylistChanged(DoOnPlaylistChanged);
             currentPlaylist.OnCurrentMediaItemChanged += new PL_OnMediaItemChanged(DoOnCurrentMediaItemChanged);
             currentPlaylist.OnPreviousMediaItemChanged += new PL_OnMediaItemChanged(DoOnPreviousMediaItemChanged);
             currentPlaylist.OnNextMediaItemChanged += new PL_OnMediaItemChanged(DoOnNextMediaItemChanged);
@@ -196,6 +207,7 @@ namespace CDR.LibRTMP.Media
         {
             lock (lockVAR)
             {
+                netConnectionReady = false;
                 if (netConnection != null)
                 {
                     MPThread_Disconnect();
@@ -292,6 +304,9 @@ namespace CDR.LibRTMP.Media
 
             if (Bass.BASS_Init(-1, BASS_SAMPLE_RATE, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero)) // 0=console application otherwise this.Handle
             {
+#if __IOS__
+                //Bass.BASS_SetConfig(BASSConfig.BASS_CONFIG_IOS_SPEAKER, 1); 
+#endif
                 bassFileProcs = new BASS_FILEPROCS(
                     new FILECLOSEPROC(_BassCallback_FileProcUserClose),
                     new FILELENPROC(_BassCallback_FileProcUserLength),
@@ -498,8 +513,11 @@ namespace CDR.LibRTMP.Media
 
                     int count = nsh.Buffer.Read(byteBuffer, todo);
                     todo -= count;
-                    // Nu kopieren in unmanaged data
-                    Marshal.Copy(byteBuffer, 0, buffer, count);
+                    if (count > 0)
+                    {
+                        // Nu kopieren in unmanaged data
+                        Marshal.Copy(byteBuffer, 0, buffer, count);
+                    }
                 } //lock
 
                 if (todo > 0)
@@ -615,6 +633,11 @@ namespace CDR.LibRTMP.Media
                                 break;
 
                             case MP_MethodCall.Play:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -623,11 +646,19 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
+                                    if (playButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }
                                     message = null;
                                 }
                                 break;
                             case MP_MethodCall.Pause:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -636,11 +667,19 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
+                                    if (pauseButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }
                                     message = null;
                                 }
                                 break;
                             case MP_MethodCall.Stop:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -649,7 +688,10 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
+                                    if (stopButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }
                                     message = null;
                                 }
                                 break;
@@ -657,6 +699,11 @@ namespace CDR.LibRTMP.Media
                                 MPThread_KillPreBufferedMediaItem();
                                 break;
                             case MP_MethodCall.Seek:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -665,11 +712,19 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
+                                    if (pauseButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }
                                     message = null;
                                 }
                                 break;
                             case MP_MethodCall.Next:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -678,11 +733,19 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
-                                    message = null;
+                                    if (nextButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }                                        
+                                    message = null;                                    
                                 }
                                 break;
                             case MP_MethodCall.Previous:
+                                if (!netConnectionReady)
+                                {
+                                    // klaar
+                                    break;
+                                }
                                 if (!commandInProgress)
                                 {
                                     commandInProgress = true;
@@ -691,7 +754,10 @@ namespace CDR.LibRTMP.Media
                                 else
                                 {
                                     // Queue it in again, have to wait until netstream id ready!
-                                    RequeueMessage(message);
+                                    if (previousButton == MPButtonState.Active)
+                                    {
+                                        RequeueMessage(message);
+                                    }
                                     message = null;
                                 }
                                 break;
@@ -712,6 +778,13 @@ namespace CDR.LibRTMP.Media
                     // Is there a next MediaItem to play? (and no netstreams queued) 
                     MPThread_CheckForPreBuffering();
                     // ======================================================================================================================
+
+                    // Previous button can be activated when 10seconds have played
+                    if (mediaplayerState == Media.MediaplayerState.Playing && previousButton == MPButtonState.Inactive && Position > PREVIOUS_CMD_IS_GOTOBEGIN_IN_SEC)
+                    {
+                        // PreviousButton will change
+                        DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+                    }
 
                     // ======================================================================================================================
                     // Generate OnTick event approximately every 500 milliseconds
@@ -819,6 +892,8 @@ namespace CDR.LibRTMP.Media
             MP_OnPreBuffer doOnPreBuffer = null;
             MediaItem preBufferedMediaItem = null;
             PreBufferState preBufferState = PreBufferState.Unknown;
+            bool buttonStateChanged = false;
+
             lock (lockVAR)
             {
                 if (netStreams.Count == 1 && !netStreams[0].NextNetStreamStarted)
@@ -831,6 +906,7 @@ namespace CDR.LibRTMP.Media
                         if (currentPlaylist.NextMediaItem != null)
                         {
                             netStreams[0].NextNetStreamStarted = true;
+                            buttonStateChanged = true;
                             // Start next netstream, when event "NS_OnAssignStream_ID" is fired
                             // it will be handled further.
                             lock (lockVAR)
@@ -851,10 +927,14 @@ namespace CDR.LibRTMP.Media
                     }
                 }
             }
+
             DoEvent_MP_OnPreBuffer(doOnPreBuffer, this, preBufferedMediaItem, preBufferState);
 
-            // Button are probably changed
-            DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            if (buttonStateChanged)
+            {
+                // Button are probably changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
         }
 
         /// <summary>
@@ -880,6 +960,7 @@ namespace CDR.LibRTMP.Media
             // possible button state changed
             DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
 
+            netConnectionReady = false;
             netStreams.Clear();
             if (netConnection != null)
             {
@@ -904,6 +985,7 @@ namespace CDR.LibRTMP.Media
             {
                 // turn it off
                 dtLastAutoReconnect = DateTime.MaxValue; // turns autoreconnect off
+                netConnectionReady = false;
 
                 foreach (NetStreamHelper nsh in netStreams)
                 {
@@ -913,11 +995,16 @@ namespace CDR.LibRTMP.Media
 
                 if (netConnection != null)
                 {
-                    netConnection.Close();
+                    NetConnection tmpNC = netConnection;
+                    // protect anaginst recusve callback
                     netConnection = null;
+                    
+                    // this should fire an ondisconnectserver event
+                    tmpNC.Close();                    
                 }
             } //lock
         }
+
 
         /// <summary>
         /// This function is called every 100ms or so to try and keep the bass buffer filled
@@ -972,6 +1059,7 @@ namespace CDR.LibRTMP.Media
             MP_OnStateChangeMediaplayer onStateChangeMediaplayer = null;
             MP_OnPlaylist onPlaylistStart = null;
             Playlist playlist = null;
+            bool buttonStateChanged = false;
 
             lock (lockVAR)
             {
@@ -987,6 +1075,7 @@ namespace CDR.LibRTMP.Media
                             netStreams[0].NetStream.Pause(false);
 
                             netStreams[0].PlayState = NetStreamState.Playing;
+                            buttonStateChanged = true;
                             mediaplayerState = MediaplayerState.Playing;
                             onStateChangeMediaplayer = OnStateChangeMediaplayer;
                         }
@@ -998,6 +1087,7 @@ namespace CDR.LibRTMP.Media
 
                         // Simulate MediaItem events changed (oldMediaitem is null!)
                         TriggerMediaItemEvents();
+                        buttonStateChanged = true;
 
                         // Start new netstream, when event "NS_OnAssignStream_ID" is fired
                         // it will be handled further.
@@ -1021,13 +1111,20 @@ namespace CDR.LibRTMP.Media
                         } //lock
                     }
                 }
+                else
+                {
+                    commandInProgress = false;
+                }
             } //lock
 
             // Fire event we go to Play state
             DoEvent_MP_OnStateChangeMediaplayer(onStateChangeMediaplayer, this, mediaplayerState);
-
-            // possible button state changed
-            DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            
+            if (buttonStateChanged)
+            {
+                // possible button state changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
 
             // Fire event that Playlist play has started(event will only be fired
             // when onPlaylistStart is not null.)
@@ -1041,6 +1138,7 @@ namespace CDR.LibRTMP.Media
         private void MPThread_Pause()
         {
             MP_OnStateChangeMediaplayer onStateChangeMediaplayer = null;
+            bool buttonStateChanged = false;
 
             lock (lockVAR)
             {
@@ -1059,15 +1157,23 @@ namespace CDR.LibRTMP.Media
 
                         onStateChangeMediaplayer = OnStateChangeMediaplayer;
                         mediaplayerState = MediaplayerState.Pause;
+                        buttonStateChanged = true;
                     }
+                }
+                else
+                {
+                    commandInProgress = false;
                 }
             }
 
             // Fire event we go to pause state
             DoEvent_MP_OnStateChangeMediaplayer(onStateChangeMediaplayer, this, mediaplayerState);
 
-            // possible button state changed
-            DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            if (buttonStateChanged)
+            {
+                // possible button state changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
         }
 
         private void MPThread_Stop()
@@ -1077,6 +1183,7 @@ namespace CDR.LibRTMP.Media
             MP_OnStateChangeMediaplayer onStateChangeMediaplayer = null;
             MP_OnMediaItem onMediaItemEndPlay = null;
             MediaItem item = null;
+            bool buttonStateChanged = false;
 
             lock (lockVAR)
             {
@@ -1100,6 +1207,7 @@ namespace CDR.LibRTMP.Media
                     onStateChangeMediaplayer = OnStateChangeMediaplayer;
                     mediaplayerState = MediaplayerState.Stop;
                 }
+                buttonStateChanged = true;
 
                 foreach (NetStreamHelper nsh in netStreams)
                 {
@@ -1125,8 +1233,11 @@ namespace CDR.LibRTMP.Media
             // Fire event we go to stop state
             DoEvent_MP_OnStateChangeMediaplayer(onStateChangeMediaplayer, this, mediaplayerState);
 
-            // possible button state changed
-            DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            if (buttonStateChanged)
+            {
+                // possible button state changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
         }
 
         private void MPThread_KillPreBufferedMediaItem()
@@ -1165,6 +1276,7 @@ namespace CDR.LibRTMP.Media
         {
             MP_OnMediaItem onMediaItemSeekStart = null;
             MediaItem item = null;
+            bool buttonStateChanged = false;
 
             lock (lockVAR)
             {
@@ -1184,14 +1296,20 @@ namespace CDR.LibRTMP.Media
                         netStreams[0].PlayState = NetStreamState.Seek;
                         // Send server seek command
                         netStreams[0].NetStream.Seek(positionInMS);
+                        buttonStateChanged = true;
                     }
                 }
             }
 
+            commandInProgress = false;
+
             DoEvent_MP_OnMediaItem(onMediaItemSeekStart, this, item);
 
-            // possible button state changed
-            DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            if (buttonStateChanged)
+            {
+                // possible button state changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
         }
 
         private void MPThread_Next()
@@ -1242,12 +1360,23 @@ namespace CDR.LibRTMP.Media
                     {
                         Bass.BASS_ChannelPause(netStreams[0].BassHandle);
 
+                        // within 10 seconds of beginning?
+                        if (Position > PREVIOUS_CMD_IS_GOTOBEGIN_IN_SEC)
+                        {
+                            // "MPThread_Seek" function will reset "commandInProgress"
+                            // goto beginning of media file
+                            MPThread_Seek(0);
+
+                            return;
+                        }
+
                         Guid itemGUID = Guid.Empty;
                         if (currentPlaylist.PreviousMediaItem != null)
                         {
                             itemGUID = currentPlaylist.PreviousMediaItem.GUID;
                         }
-                        // Fake call to stop playing.
+                        // Fake call to stop playing and select the next item 
+                        // (That's what itemGUID is for)
                         BassCallback_EndSync(0, 0, 0, itemGUID);
                     }
                 }
@@ -1261,6 +1390,20 @@ namespace CDR.LibRTMP.Media
 
         #region Private NetConnection/NetStream events implementations and helper functions
 
+        protected void ResetStateMediaplayer()
+        {
+            audioInBassBuffer = 0.0; // number of seconds of audio data in bass buffer
+            lastPosition = 0.0;
+            failedPlayCount = 0;
+            commandInProgress = false;
+            netConnectionReady = false;
+            // drain command queue (use locking?)
+            lock (lockVAR)
+            {
+                messageQueue.Clear();
+            } //lock
+        }
+
         /// <summary>
         /// Event fired by NetConnection
         /// </summary>
@@ -1271,6 +1414,7 @@ namespace CDR.LibRTMP.Media
             if (success)
             {
                 netStreams.Clear();
+                netConnectionReady = true;
 
                 MP_OnServer onServerConnect = null;
                 MP_OnStateChangeMediaplayer onStateChangeMediaplayer = null;
@@ -1299,8 +1443,7 @@ namespace CDR.LibRTMP.Media
                     mediaplayerState = MediaplayerState.Disconnected;
                     dtLastAutoReconnect = DateTime.Now; // make sure we keep trying to connect
 
-                    audioInBassBuffer = 0.0; // number of seconds of audio data in bass buffer
-                    lastPosition = 0.0;
+                    ResetStateMediaplayer();
                 } //lock
 
                 DoEvent_MP_OnServer(onServerDisconnect, this);
@@ -1344,8 +1487,7 @@ namespace CDR.LibRTMP.Media
                     dtLastAutoReconnect = DateTime.Now; // make sure we keep trying to connect
                 }
 
-                audioInBassBuffer = 0.0; // number of seconds of audio data in bass buffer
-                lastPosition = 0.0;
+                ResetStateMediaplayer();
 
                 onServerDisconnect = OnServerDisconnect;
             }
@@ -1398,8 +1540,6 @@ namespace CDR.LibRTMP.Media
             NetStreamHelper netStreamHelper = FindNetStreamHelper(sender as NetStream);
             if (netStreamHelper != null)
             {
-                //Console.WriteLine("StreamID=" + netStreamHelper.NetStream.Stream_ID.ToString() + " | " + netStreamHelper.Item.MediaFile + " | " + netStreamStatusEvent.Code);
-
                 switch (netStreamStatusEvent.Code)
                 {
                     case "NetStream.Play.Stop": // start buffering next mediaitem?
@@ -1408,6 +1548,8 @@ namespace CDR.LibRTMP.Media
                             commandInProgress = false; // reset it
                             netStreamHelper.IsComplete = true;
                         }
+                        // possible button state changed
+                        DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
                         break;
                     case "NetStream.Play.OnMetaData":
                         lock (lockVAR)
@@ -1416,6 +1558,8 @@ namespace CDR.LibRTMP.Media
                         }
                         break;
                     case "NetStream.Play.Start":
+                    case "NetStream.Play.Resume":
+                        failedPlayCount = 0; // reset
                         commandInProgress = false; // reset it after Play command
                         // Do not set PlayState from Seek to Playing, otherwise 
                         // call to "StartPlayingAudioChannel" won't start playing audio again!
@@ -1449,9 +1593,52 @@ namespace CDR.LibRTMP.Media
                         }
                         // Should already be set to this!
                         netStreamHelper.PlayState = NetStreamState.Seek;
+                        // possible button state changed
+                        DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
                         break;
                     case "NetStream.Pause.Notify":
                         commandInProgress = false; // reset it after seek command
+                        // possible button state changed
+                        DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+                        break;
+
+                    case "NetStream.Play.Failed": // event when playing fails and we have to skip to the next one
+                    case "NetStream.Play.StreamNotFound":
+                    case "NetStream.Failed":
+                        failedPlayCount++;
+
+                        // Fake status so Next and stop work
+                        lock (lockVAR)
+                        {
+                            if (netStreams.Count == 1)
+                            {
+                                netStreams[0].Item.SkipBecauseOfError = true;
+                                netStreams[0].PlayState = NetStreamState.Playing;
+                            }
+                            else if (netStreams.Count > 1)
+                            {
+                                NetStreamHelper nsh = netStreams[netStreams.Count - 1];
+                                netStreams.RemoveAt(netStreams.Count - 1);
+                                netStreams[netStreams.Count - 1].NextNetStreamStarted = false;
+
+                                nsh.Item.SkipBecauseOfError = true;
+                                CloseAudioStream(nsh);
+
+                                MPThread_CheckForPreBuffering();
+                                break;
+                            }
+                        } //lock
+
+                        if (currentPlaylist.NextMediaItemIndex != -1 && failedPlayCount <= 10)
+                        {
+                            // Continue with next one if there is one!
+                            MPThread_Next();
+                        }
+                        else
+                        {
+                            // stop playing, 10 consecutive fails 
+                            MPThread_Stop();
+                        }
                         break;
                 } //switch
             }
@@ -1462,6 +1649,29 @@ namespace CDR.LibRTMP.Media
             NetStreamHelper netStreamHelper = FindNetStreamHelper(sender as NetStream);
             if (netStreamHelper != null)
             {
+                /*
+                 * Test code to check for byte perfect copy
+                 * 
+                private System.IO.FileStream _FileStream = null; // put this in the class
+
+                 * 
+                if (netStreamHelper.Item.MediaFile == "JK142176-0002")
+                {
+                    if (_FileStream == null)
+                    {
+                        Console.WriteLine("!!!!!WRITING!!!!!!!!");
+                        _FileStream = new System.IO.FileStream(netStreamHelper.Item.MediaFile + ".MP3", System.IO.FileMode.Create, System.IO.FileAccess.Write);
+                    }
+                    _FileStream.Write(data, 0, data.Length);
+                }
+                else if (_FileStream != null)
+                {
+                    Console.WriteLine("!!!!!CLOSEING!!!!!!!!");
+                    _FileStream.Close();
+                    _FileStream = null;
+                }
+                */
+
                 // Store data in buffer
                 if (netStreamHelper.Buffer != null)
                 {
@@ -1484,7 +1694,7 @@ namespace CDR.LibRTMP.Media
                 //Console.Write("\r" + netStreamHelper.Item.MediaFile + " ; UsedBytes=" + netStreamHelper.Buffer.UsedBytes.ToString());
 
                 // When no bass channel has been created create it (but there must be enough data in the buffer!)
-                if (netStreamHelper.BassHandle == 0 && netStreamHelper.Buffer.UsedBytes >= BASS_MIN_INITIAL_FILLED_BUFFER)
+                if (netStreamHelper.BassHandle == 0 && netStreamHelper.Buffer != null && netStreamHelper.Buffer.UsedBytes >= BASS_MIN_INITIAL_FILLED_BUFFER)
                 {
                     // bass needs for mp3 atleast 4000 bytes before is can play
                     // Startup new bassChannel we have enough data in the buffer to start playing
@@ -1492,7 +1702,7 @@ namespace CDR.LibRTMP.Media
                     if (netStreamHelper.BassHandle != 0)
                     {
                         // Set volume for this channel
-                        float volume = 100;
+                        float volume = 100.0f;
                         lock (lockVAR)
                         {
                             volume = Convert.ToSingle(bassVolume) / 100.0f;
@@ -1537,7 +1747,7 @@ namespace CDR.LibRTMP.Media
         {
             MP_OnMediaItem onMediaItemStartPlay = null;
             MediaItem item = null;
-
+            bool buttonStateChanged = false;
             lock (lockVAR)
             {
                 if (netStreams.Count > 0)
@@ -1546,6 +1756,7 @@ namespace CDR.LibRTMP.Media
                     {
                         bool wasSeeking = (netStreams[0].PlayState == NetStreamState.Seek);
                         netStreams[0].PlayState = NetStreamState.Playing;
+                        buttonStateChanged = true;
                         // Startup playing the audio, bass is ready for it
                         // And start playing the music!
                         Bass.BASS_ChannelPlay(netStreams[0].BassHandle, false);
@@ -1567,6 +1778,12 @@ namespace CDR.LibRTMP.Media
             // Fire event that MediaItem start playing audio (event will only be fired
             // when onMediaItemStartPlay and item are not null.)
             DoEvent_MP_OnMediaItem(onMediaItemStartPlay, this, item);
+
+            if (buttonStateChanged)
+            {
+                //Button state has changed!
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
+            }
         }
 
         /// <summary>
@@ -1663,7 +1880,7 @@ namespace CDR.LibRTMP.Media
         /// Stops playing audio, disconnects any netStream connections and as
         /// last disconnects the NetConnection
         /// </summary>
-        public void Disconnect1()
+        public void Disconnect()
         {
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Disconnect;
@@ -1691,7 +1908,7 @@ namespace CDR.LibRTMP.Media
         {
             get
             {
-                return (netStreams != null);
+                return (netConnection != null && netConnection.IsConnected);
             }
         }
 
@@ -1758,6 +1975,13 @@ namespace CDR.LibRTMP.Media
 
         public bool Play(long startPositionInMS = -1)
         {
+            if (netConnection == null || !netConnection.IsConnected)
+            {
+                return false;
+            }
+
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Play;
             message.Params = new object[] { startPositionInMS };
@@ -1769,6 +1993,13 @@ namespace CDR.LibRTMP.Media
 
         public bool Pause()
         {
+            if (netConnection == null || !netConnection.IsConnected)
+            {
+                return false;
+            }
+
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Pause;
 
@@ -1779,6 +2010,8 @@ namespace CDR.LibRTMP.Media
 
         public bool Stop()
         {
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Stop;
 
@@ -1789,6 +2022,14 @@ namespace CDR.LibRTMP.Media
 
         public bool Seek(long seekTimeInMS)
         {
+            // Allowed?
+            if (!IsPlaying)
+            {
+                return false;
+            }
+
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Seek;
             message.Params = new object[] { seekTimeInMS };
@@ -1802,6 +2043,14 @@ namespace CDR.LibRTMP.Media
         /// </summary>
         public bool Next()
         {
+            // Allowed?
+            if (nextButton == MPButtonState.Inactive)
+            {
+                return false;
+            }
+            
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Next;
             AddMessageToPump(message);
@@ -1812,6 +2061,14 @@ namespace CDR.LibRTMP.Media
         /// Goto the previous track in the playlist
         public bool Previous()
         {
+            // Allowed?
+            if (previousButton == MPButtonState.Inactive)
+            {
+                return false;
+            }
+
+            DoEvent_MP_OnControleButtonStateChange_DisableTemporary(OnControleButtonStateChange, this);
+
             MP_Message message = new MP_Message();
             message.MethodCall = MP_MethodCall.Previous;
             AddMessageToPump(message);
@@ -1987,6 +2244,9 @@ namespace CDR.LibRTMP.Media
                 {
                     playlist.ChangeRepeatMode(repeatMode);
                 } //foreach
+
+                // Button are probably changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
             }
         }
 
@@ -2002,6 +2262,9 @@ namespace CDR.LibRTMP.Media
             set
             {
                 currentPlaylist.ChangeShuffleMode(value);
+
+                // Button are probably changed
+                DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this);
             }
         }
 
@@ -2046,6 +2309,15 @@ namespace CDR.LibRTMP.Media
         public void TriggerButtonStateEvent()
         {
             DoEvent_MP_OnControleButtonStateChange(OnControleButtonStateChange, this, true);
+        }
+
+        /// <summary>
+        /// Get MediaItem position in CurrentPlaylist or -1 when not found,
+        /// need for "InsertMediaItem(int atPosition, MediaItem item)"
+        /// </summary>
+        public int MediaItemPosition(MediaItem item)
+        {
+            return currentPlaylist.GetMediaItemIndex(item);
         }
 
         /// <summary>
@@ -2257,11 +2529,49 @@ namespace CDR.LibRTMP.Media
             }
         }
 
+        public int PlaylistBlockChangeEvent()
+        {
+            disablePlaylistChangeEvent++;
+            return disablePlaylistChangeEvent;
+        }
+
+        public int PlaylistUnblockChangeEvent()
+        {
+            if (disablePlaylistChangeEvent > 0)
+            {
+                disablePlaylistChangeEvent--;
+            }
+            return disablePlaylistChangeEvent;
+        }
+
         #endregion
 
 
         #region Event generation
 
+        private void DoOnPlaylistChanged(object sender, Playlist playlist)
+        {
+            if (OnPlaylistChanged != null && disablePlaylistChangeEvent == 0)
+            {
+                MP_Params param = new MP_Params();
+                param.Params = new object[] { OnPlaylistChanged, this, playlist };
+
+                SynchronizationContext sc;
+                lock (lockVAR)
+                {
+                    sc = synchronizationContext;
+                } //lock
+                if (sc != null)
+                {
+                    sc.Post(HandleOnEventCallUserCode, param);
+                }
+                else
+                {
+                    HandleOnEventCallUserCode(param);
+                }
+            }
+        }
+    
         private void DoOnCurrentMediaItemChanged(object sender, MediaItem oldMediaItem, MediaItem newMediaItem)
         {
             if (OnCurrentMediaItemChanged != null)
@@ -2463,9 +2773,9 @@ namespace CDR.LibRTMP.Media
             // Determine the buttonstates
             lock (lockVAR)
             {
-                if (netConnection == null || !netConnection.IsConnected)
+                if (netConnection == null || !netConnection.IsConnected || currentPlaylist.Count <= 0 || commandInProgress)
                 {
-                    // we're not connected to a server
+                    // we're not connected to a server, of nothing to play
                     previousButton = MPButtonState.Inactive;
                     stopButton = MPButtonState.Inactive;
                     playButton = MPButtonState.Inactive;
@@ -2485,10 +2795,12 @@ namespace CDR.LibRTMP.Media
                 {
                     // we're playing music of somekind
                     previousButton = MPButtonState.Inactive;
-                    if (currentPlaylist.PreviousMediaItemIndex != -1)
+                    // previous is also active after 10 seconds have played
+                    if (currentPlaylist.PreviousMediaItemIndex != -1 || Position > PREVIOUS_CMD_IS_GOTOBEGIN_IN_SEC)
                     {
                         previousButton = MPButtonState.Active;
                     }
+
                     nextButton = MPButtonState.Inactive;
                     if (currentPlaylist.NextMediaItemIndex != -1)
                     {
@@ -2499,13 +2811,19 @@ namespace CDR.LibRTMP.Media
                     {
                         case NetStreamState.None: // ?????????
                             stopButton = MPButtonState.Inactive;
-                            playButton = MPButtonState.Active;
+                            playButton = MPButtonState.Inactive;
                             pauseButton = MPButtonState.Inactive;
+
+                            previousButton = MPButtonState.Inactive;
+                            nextButton = MPButtonState.Inactive;
                             break;
                         case NetStreamState.Connecting:
                             stopButton = MPButtonState.Inactive;
                             playButton = MPButtonState.Inactive;
                             pauseButton = MPButtonState.Inactive;
+
+                            previousButton = MPButtonState.Inactive;
+                            nextButton = MPButtonState.Inactive;
                             break;
                         case NetStreamState.Playing:
                             stopButton = MPButtonState.Active;
@@ -2516,6 +2834,9 @@ namespace CDR.LibRTMP.Media
                             stopButton = MPButtonState.Inactive;
                             playButton = MPButtonState.Inactive;
                             pauseButton = MPButtonState.Inactive;
+
+                            previousButton = MPButtonState.Inactive;
+                            nextButton = MPButtonState.Inactive;
                             break;
                         case NetStreamState.Pause:
                             stopButton = MPButtonState.Active;
@@ -2525,6 +2846,15 @@ namespace CDR.LibRTMP.Media
                     } //switch
                 }
             } //lock
+
+            /*
+            Console.WriteLine("--");
+            Console.WriteLine("previous:" + previousButton.ToString());
+            Console.WriteLine("stop:" + stopButton.ToString());
+            Console.WriteLine("play:" + playButton.ToString());
+            Console.WriteLine("pause:" + pauseButton.ToString());
+            Console.WriteLine("next:" + nextButton.ToString());
+            */
 
             // when state of one or more buttons is changed fire an event!
             if (forceEvent || oldPreviousButton != previousButton || oldStopButton != stopButton || oldPlayButton != playButton || oldPauseButton != pauseButton || oldnextButton != nextButton)
@@ -2547,6 +2877,42 @@ namespace CDR.LibRTMP.Media
                     {
                         HandleOnEventCallUserCode(param);
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Fire event to diable button states temporary, will be activated after command has done something
+        /// </summary>
+        /// <param name="doEvent"></param>
+        /// <param name="sender"></param>
+        private void DoEvent_MP_OnControleButtonStateChange_DisableTemporary(MP_OnControleButtonStateChange doEvent, object sender)
+        {
+            // Disable all button states (will be recalculated when normal event 
+            // is fired
+            previousButton = MPButtonState.Inactive;
+            stopButton = MPButtonState.Inactive;
+            playButton = MPButtonState.Inactive;
+            pauseButton = MPButtonState.Inactive;
+            nextButton = MPButtonState.Inactive;
+
+            if (doEvent != null)
+            {
+                MP_Params param = new MP_Params();
+                param.Params = new object[] { doEvent, sender, MPButtonState.Inactive, MPButtonState.Inactive, MPButtonState.Inactive, MPButtonState.Inactive, MPButtonState.Inactive };
+
+                SynchronizationContext sc;
+                lock (lockVAR)
+                {
+                    sc = synchronizationContext;
+                } //lock
+                if (sc != null)
+                {
+                    sc.Post(HandleOnEventCallUserCode, param);
+                }
+                else
+                {
+                    HandleOnEventCallUserCode(param);
                 }
             }
         }
@@ -2623,6 +2989,10 @@ namespace CDR.LibRTMP.Media
                 else if (param.Params[0] is MP_OnPlaylist)
                 {
                     (param.Params[0] as MP_OnPlaylist)(param.Params[1], (Playlist)param.Params[2]);
+                }
+                else if (param.Params[0] is PL_OnPlaylistChanged)
+                {
+                    (param.Params[0] as PL_OnPlaylistChanged)(param.Params[1], (Playlist)param.Params[2]);
                 }
                 else if (param.Params[0] is MP_OnMediaItem)
                 {

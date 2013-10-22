@@ -51,6 +51,7 @@ namespace CDR.LibRTMP
 
         private Thread thread = null;
         private bool threadStarted = false;
+        private bool closeCalled = false;
         // Info:
         //   http://www.codeproject.com/Articles/31971/Understanding-SynchronizationContext-Part-I
         //   http://www.codeproject.com/Articles/32113/Understanding-SynchronizationContext-Part-II
@@ -65,6 +66,8 @@ namespace CDR.LibRTMP
 
 
         private NetConnectionState netConnectionState = NetConnectionState.Disconnected;
+        private DateTime dtNetConnectionKeepAlive = DateTime.MaxValue;
+        private int timeOutKeepAliveInSec = 10; // how long between no data over connection do we check for connection
         private ServerLink serverLink = null;
         private Socket tcpSocket = null;
         private bool DisconnectEventSend = false; // used to limit sending only one disconnect event after we had a succesfull connect
@@ -244,6 +247,13 @@ namespace CDR.LibRTMP
         {
             try
             {
+                // prevent continues recurve callback
+                if (closeCalled)
+                {
+                    return;
+                }
+                closeCalled = true;
+
                 for (int i = netStreams.GetLowerBound(0); i < netStreams.GetUpperBound(0); i++)
                 {
                     if (netStreams[i] != null)
@@ -253,6 +263,30 @@ namespace CDR.LibRTMP
                     }
                 } //for
                 netStreamsList.Clear();
+                // Fire event
+
+                if (OnDisconnect != null)
+                {
+                    // We have to explcitly start this event, because after this
+                    // the thread will be killed!
+                    MQ_RTMPMessage message = new MQ_RTMPMessage();
+                    message.MethodCall = MethodCall.OnEventCallUserCode;
+                    message.Params = new object[] { OnDisconnect, this };
+
+                    SynchronizationContext sc;
+                    lock (lockVAR)
+                    {
+                        sc = synchronizationContext;
+                    } //lock
+                    if (sc != null)
+                    {
+                        sc.Send(HandleOnEventCallUserCode, message);
+                    }
+                    else
+                    {
+                        HandleOnEventCallUserCode(message);
+                    }
+                }
             }
             catch (Exception e)
             {
@@ -398,7 +432,6 @@ namespace CDR.LibRTMP
             AddMessageToPump(message);
         }
 
-
         /// <summary>
         /// Deletes a logical channel. Stream_id is give so we don't
         /// have to mess with thread issues
@@ -437,12 +470,15 @@ namespace CDR.LibRTMP
 
         /// <summary>
         /// Is this NetConnection connected to a RTMP server
+        /// (Does it have a valid connection!), this is different from
+        /// "MQInternal_IsConnected" which only checks is we are connected
+        /// (when in the handshake state)
         /// </summary>
         public bool IsConnected
         {
             get
             {
-                return MQInternal_IsConnected;
+                return MQInternal_IsConnected && netConnectionState == NetConnectionState.Connected;
             }
         }
 
@@ -785,6 +821,17 @@ namespace CDR.LibRTMP
                         } //foreach
                     }
 
+                    // Check if we need to check for keep-alive
+                    TimeSpan tsKeepAlive = (DateTime.Now - dtNetConnectionKeepAlive);
+                    if (tsKeepAlive.TotalDays <= 1 && tsKeepAlive.TotalSeconds >= timeOutKeepAliveInSec)
+                    {
+                        // Send ping to check for connection alive!
+                        LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.StartMessageQueueProcessor] Sending Ping for Keepalive test"));
+
+                        MQ_SendPing(6, (uint)System.Environment.TickCount, (uint)System.Environment.TickCount);
+                        dtNetConnectionKeepAlive = DateTime.Now;
+                    }
+
                     if (threadStarted && MessageQueueCount == 0 && !MQInternal_DataInSocket)
                     {
                         // Wait 100 ms, before running again
@@ -1051,11 +1098,14 @@ namespace CDR.LibRTMP
 
                     // temporary before we set the state to disconnected!
                     netConnectionState = NetConnectionState.Connecting;
+                    dtNetConnectionKeepAlive = DateTime.Now;
                 }
             }
 
             if (onResult != null)
             {
+                // this is delegate given when connecting (used by Mediaplayer class)
+                // makes event OnConnect not needed
                 DoNC_ResultCallBackConnectEvent(onResult, success);
             }
 
@@ -1160,6 +1210,7 @@ namespace CDR.LibRTMP
                 }
                 tcpSocket = null;
                 netConnectionState = NetConnectionState.Disconnected;
+                dtNetConnectionKeepAlive = DateTime.MaxValue;
 
                 receiveTimeoutMS = RTMPConst.TIMEOUT_RECEIVE;
 
@@ -1966,8 +2017,12 @@ namespace CDR.LibRTMP
                         LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Ping {0}", nTime));
                         MQ_SendPing(0x07, nTime, 0);
                         break;
+                    case 7:
+                        // server pong. Do nothing
+                        LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Pong received {0}", nTime));
+                        break;
                     case 31:
-                        LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Stream BufferEmpty {0}", nTime));
+                        LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Stream BufferEmpty {0}", nTime));
                         //if (!mediaLiveStream)
                         {
                             // ---------------------- TODO!!!!!!!!!!!!!!! ---------------------------
@@ -1987,7 +2042,7 @@ namespace CDR.LibRTMP
                         }
                         break;
                     case 32:
-                        LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Stream BufferReady {0}", nTime));
+                        LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Stream BufferReady {0}", nTime));
                         break;
                     default:
                         LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection.HandlePing] Stream xx {0}", nTime));
@@ -2035,6 +2090,7 @@ namespace CDR.LibRTMP
         private void HandleMedia(RTMPPacket packet)
         {
             int stream_id = packet.InfoField2;
+
             if (netStreams[stream_id] != null)
             {
                 netStreams[stream_id].HandleOnMediaPacket(packet);
@@ -2340,23 +2396,23 @@ namespace CDR.LibRTMP
         {
             netConnectionConnectInfo.Clear();
 
-            // In position 2 and 3 is the info we want
-            if (obj.Count < 3 && obj[2].DataType != AMFDataType.AMF_OBJECT && obj[3].DataType != AMFDataType.AMF_OBJECT)
+            // WOWZA: In position 2 and 3 is the info we want as
+            // Red5: has all it's info in [3] it seems
+            if (obj.Count < 3)
             {
                 return;
             }
 
             List<AMFObjectProperty> props = new List<AMFObjectProperty>();
-
-            // Var 2
             props.Clear();
-            obj[2].ObjectValue.FindMatchingProperty("fmsVer", props, 1);
+
+            obj.FindMatchingProperty("fmsVer", props, 1);
             if (props.Count > 0)
             {
                 netConnectionConnectInfo.FMSVer = props[0].StringValue;
             }
             props.Clear();
-            obj[2].ObjectValue.FindMatchingProperty("capabilities", props, 1);
+            obj.FindMatchingProperty("capabilities", props, 1);
             if (props.Count > 0)
             {
                 try
@@ -2366,7 +2422,7 @@ namespace CDR.LibRTMP
                 catch { }
             }
             props.Clear();
-            obj[2].ObjectValue.FindMatchingProperty("mode", props, 1);
+            obj.FindMatchingProperty("mode", props, 1);
             if (props.Count > 0)
             {
                 try
@@ -2376,33 +2432,32 @@ namespace CDR.LibRTMP
                 catch { }
             }
 
-            // Var 3
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("code", props, 1);
+            obj.FindMatchingProperty("code", props, 1);
             if (props.Count > 0)
             {
                 netConnectionConnectInfo.Code = props[0].StringValue;
             }
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("level", props, 1);
+            obj.FindMatchingProperty("level", props, 1);
             if (props.Count > 0)
             {
                 netConnectionConnectInfo.Level = props[0].StringValue;
             }
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("description", props, 1);
+            obj.FindMatchingProperty("description", props, 1);
             if (props.Count > 0)
             {
                 netConnectionConnectInfo.Description = props[0].StringValue;
             }
 
-            // var (3) parameters
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("data", props, 1);
+            obj.FindMatchingProperty("data", props, 1);
             if (props.Count > 0)
             {
+                AMFObject obj2 = props[0].ObjectValue;
                 props.Clear();
-                obj[3].ObjectValue.GetProperty("data").ObjectValue.FindMatchingProperty("version", props, 1);
+                obj2.FindMatchingProperty("version", props, 1);
                 if (props.Count > 0)
                 {
                     try
@@ -2414,8 +2469,9 @@ namespace CDR.LibRTMP
                 }
             }
 
+            // Red5 doesn't seem to have this property
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("clientid", props, 1);
+            obj.FindMatchingProperty("clientid", props, 1);
             if (props.Count > 0)
             {
                 try
@@ -2424,8 +2480,9 @@ namespace CDR.LibRTMP
                 }
                 catch { }
             }
+            // Red5 doesn't seem to have this property
             props.Clear();
-            obj[3].ObjectValue.FindMatchingProperty("objectEncoding", props, 1);
+            obj.FindMatchingProperty("objectEncoding", props, 1);
             if (props.Count > 0)
             {
                 try
@@ -2434,7 +2491,6 @@ namespace CDR.LibRTMP
                 }
                 catch { }
             }
-
         }
 
         /// <summary>
@@ -2982,7 +3038,7 @@ namespace CDR.LibRTMP
             packet.Body = enc.ToArray();
             packet.BodySize = (uint)enc.Count;
 
-            LibRTMPLogger.Log(LibRTMPLogLevel.Trace, string.Format("[CDR.LibRTMP.NetConnection] Sending pause: ({0}), Time = {1}", doPause.ToString(), channelTimestamp[netStream.MediaChannel]));
+            LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetConnection] Sending pause: ({0}), Time = {1}/{2}", doPause.ToString(), channelTimestamp[netStream.MediaChannel], TimeSpan.FromMilliseconds(Convert.ToInt32(channelTimestamp[netStream.MediaChannel]))));
 
             methodCallDictionary.Add(transactionNum, "pause");
 
@@ -3156,6 +3212,8 @@ namespace CDR.LibRTMP
                 // decrypt if needed
                 if (read > 0)
                 {
+                    // We read something so reset timer for keepalive
+                    dtNetConnectionKeepAlive = DateTime.Now;
 #if INCLUDE_TMPE
 #endif
                     {

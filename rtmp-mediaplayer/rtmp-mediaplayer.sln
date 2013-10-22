@@ -22,6 +22,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Documentation", "Documentat
 		Documentation\Readme.txt = Documentation\Readme.txt
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Red5Test", "Red5Test\Red5Test.csproj", "{90AE7642-610F-45B3-87DB-8732C78F40CE}"
+EndProject
 Global
 	GlobalSection(SubversionScc) = preSolution
 		Svn-Managed = True
@@ -48,6 +50,10 @@ Global
 		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D0CB3C76-A219-4964-8DFA-55FB968754EE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{90AE7642-610F-45B3-87DB-8732C78F40CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{90AE7642-610F-45B3-87DB-8732C78F40CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{90AE7642-610F-45B3-87DB-8732C78F40CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{90AE7642-610F-45B3-87DB-8732C78F40CE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

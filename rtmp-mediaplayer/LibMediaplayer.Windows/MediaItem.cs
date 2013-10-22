@@ -37,6 +37,7 @@ namespace CDR.LibRTMP.Media
         public Guid GUID = Guid.Empty;
         
         public string MediaFile = ""; // RMTP URL
+        public bool SkipBecauseOfError = false;
         public long NetStreamDurationInMS = -1;
         public long MetaDurationInMS = -1; // can be set by user so when stream hasn't played yet we still no the duration
         // Name of album/track, track number artiests/composers
@@ -94,6 +95,7 @@ namespace CDR.LibRTMP.Media
 
             clone.GUID = new Guid(GUID.ToString());
             clone.MediaFile = MediaFile;
+            clone.SkipBecauseOfError = SkipBecauseOfError;
             clone.NetStreamDurationInMS = NetStreamDurationInMS;
             clone.MetaDurationInMS = MetaDurationInMS;
             if (MetaData is ICloneable)

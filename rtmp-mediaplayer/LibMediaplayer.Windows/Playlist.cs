@@ -60,23 +60,24 @@ namespace CDR.LibRTMP.Media
         protected internal event PL_OnMediaItemChanged OnPreviousMediaItemChanged = null;
         protected internal event PL_OnMediaItemChanged OnNextMediaItemChanged = null;
 
+        protected internal event PL_OnPlaylistChanged OnPlaylistChanged = null;
 
         public Playlist()
         {
-            InitVars();
+            InitVars(true);
         }
 
         public Playlist(string playlistName)
         {
             lock (lockVAR)
             {
-                InitVars();
+                InitVars(true);
                 playlistNumber--; // restore counter (possible because we use a lock here!)
                 this.playlistName = playlistName;
             }
         }
 
-        private void InitVars()
+        private void InitVars(bool all = false)
         {
             lock (lockVAR)
             {
@@ -85,8 +86,11 @@ namespace CDR.LibRTMP.Media
                 currentMediaItemIndex = -1;
                 previousMediaItemIndex = -1;
                 previousHistoryList.Clear();
-                repeatMode = PlaylistRepeatMode.RepeatNone;
-                shuffleMode = false;
+                if (all)
+                {
+                    repeatMode = PlaylistRepeatMode.RepeatNone;
+                    shuffleMode = false;
+                }
 
                 playlistNumber++;
             }
@@ -133,6 +137,10 @@ namespace CDR.LibRTMP.Media
             {
                 return playlistName;
             }
+            set
+            {
+                playlistName = value;
+            }
         }
 
         /// <summary>
@@ -156,12 +164,13 @@ namespace CDR.LibRTMP.Media
 
                 repeatMode = newRepeatMode;
 
-                int newnextMediaItemIndex = NextMediaItemIndex;
+                // fire calculation for nextMediaItem;
+                nextMediaItemIndex = CalcNextMediaItem(false);
 
                 // We need to check if next mediaitem is changed!!
-                if (oldnextMediaItemIndex != newnextMediaItemIndex && OnNextMediaItemChanged != null)
+                if (oldnextMediaItemIndex != nextMediaItemIndex && OnNextMediaItemChanged != null)
                 {
-                    OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(oldnextMediaItemIndex), SafeSelectClonedMediaItem(newnextMediaItemIndex));
+                    OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(oldnextMediaItemIndex), SafeSelectClonedMediaItem(nextMediaItemIndex));
                 }
             }
         }
@@ -186,7 +195,7 @@ namespace CDR.LibRTMP.Media
         protected internal void ChangeShuffleMode(bool newShuffleMode, bool changeCurrentItemToo = false)
         {
             if (shuffleMode != newShuffleMode)
-            {                        
+            {
                 int oldnextMediaItemIndex = NextMediaItemIndex;
 
                 shuffleMode = newShuffleMode;
@@ -198,7 +207,14 @@ namespace CDR.LibRTMP.Media
                 } //foreach
 
                 // fire calculation for nextMediaItem;
-                nextMediaItemIndex = CalcShuffleMode_NextMediaItem(changeCurrentItemToo);
+                if (shuffleMode)
+                {
+                    nextMediaItemIndex = CalcShuffleMode_NextMediaItem(changeCurrentItemToo);
+                }
+                else
+                {
+                    nextMediaItemIndex = CalcNextMediaItem(changeCurrentItemToo);
+                }
 
                 if (oldnextMediaItemIndex != nextMediaItemIndex && OnNextMediaItemChanged != null)
                 {
@@ -281,7 +297,7 @@ namespace CDR.LibRTMP.Media
                 {
                     oldNextMediaItemIndex++;
                 }
-                //corect historyList
+                //correct historyList
                 for (int i = 0; i < previousHistoryList.Count; i++)
                 {
                     if (previousHistoryList[i] >= atPosition)
@@ -306,6 +322,12 @@ namespace CDR.LibRTMP.Media
             int newCurrentMediaItemIndex = CurrentMediaItemIndex;
             int newNextMediaItemIndex = NextMediaItemIndex;
 
+
+            // Fire event playlist has changed
+            if (OnPlaylistChanged != null)
+            {
+                OnPlaylistChanged(this, this);
+            }
 
             // Do we need to fire an event that the previous MediaItem has changed?
             if (oldPreviousMediaItemIndex != newPreviousMediaItemIndex && OnCurrentMediaItemChanged != null)
@@ -376,6 +398,7 @@ namespace CDR.LibRTMP.Media
                         if (nextMediaItemIndex == atPosition)
                         {
                             nextMediaItemIndex = CalcNextMediaItem(nextMediaItemIndex, false);
+                            break;
                         }
                     } //while
                 }
@@ -437,6 +460,12 @@ namespace CDR.LibRTMP.Media
             int newCurrentMediaItemIndex = CurrentMediaItemIndex;
             int newNextMediaItemIndex = NextMediaItemIndex;
 
+            // Fire event playlist has changed
+            if (OnPlaylistChanged != null)
+            {
+                OnPlaylistChanged(this, this);
+            }
+
             // Do we need to fire an event that the previous MediaItem has changed?
             if (oldPreviousMediaItemIndex != newPreviousMediaItemIndex && OnCurrentMediaItemChanged != null)
             {
@@ -473,6 +502,12 @@ namespace CDR.LibRTMP.Media
                         // reset it, points to wrong mediaitem
                         nextMediaItemIndex = -1;
                     }
+                    else if (playlist[nextMediaItemIndex].SkipBecauseOfError)
+                    {
+                        // we have to recalculate what the next track will be!
+                        nextMediaItemIndex = CalcNextMediaItem(false);
+                    }
+
                     index = nextMediaItemIndex;
                 }
 
@@ -529,6 +564,11 @@ namespace CDR.LibRTMP.Media
         {
             bool result = false;
 
+            bool fireEvents = false;
+            int oldnextMediaItemIndex = -1;
+            int oldpreviousMediaItemIndex = -1;
+            int oldcurrentMediaItemIndex = -1;
+
             // Should only be changed by "Mediaplayer" class!!
             // Warning lock could already be active here (see "CurrentMediaItem")
             lock (lockVAR)
@@ -539,9 +579,10 @@ namespace CDR.LibRTMP.Media
                     if (currentMediaItemIndex != newIndex ||
                         (currentMediaItemIndex == newIndex && (repeatMode == PlaylistRepeatMode.RepeatSingle || repeatMode == PlaylistRepeatMode.RepeatPlaylist)))
                     {
-                        int oldnextMediaItemIndex = NextMediaItemIndex;
-                        int oldpreviousMediaItemIndex = previousMediaItemIndex;
-                        int oldcurrentMediaItemIndex = currentMediaItemIndex;
+                        fireEvents = true;
+                        oldnextMediaItemIndex = NextMediaItemIndex;
+                        oldpreviousMediaItemIndex = previousMediaItemIndex;
+                        oldcurrentMediaItemIndex = currentMediaItemIndex;
 
                         if (addCurrentToPreviousHistory)
                         {
@@ -557,23 +598,26 @@ namespace CDR.LibRTMP.Media
                         nextMediaItemIndex = CalcNextMediaItem(false);
 
                         result = true;
-
-                        // Fire event that current mediaitem has changed!!
-                        // Fire event that next mediaitem has changed!!
-                        // Fire event that previous mediaitem has changed!!
-                        if (OnCurrentMediaItemChanged != null)
-                        {
-                            OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(oldcurrentMediaItemIndex), SafeSelectClonedMediaItem(currentMediaItemIndex));
-                        }
-                        if (OnPreviousMediaItemChanged != null)
-                        {
-                            OnPreviousMediaItemChanged(this, SafeSelectClonedMediaItem(oldpreviousMediaItemIndex), SafeSelectClonedMediaItem(previousMediaItemIndex));
-                        }
-                        if (OnNextMediaItemChanged != null)
-                        {
-                            OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(oldnextMediaItemIndex), SafeSelectClonedMediaItem(nextMediaItemIndex));
-                        }
                     }
+                }
+            } //lock
+
+            if (fireEvents)
+            {
+                // Fire event that current mediaitem has changed!!
+                // Fire event that next mediaitem has changed!!
+                // Fire event that previous mediaitem has changed!!
+                if (OnCurrentMediaItemChanged != null)
+                {
+                    OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(oldcurrentMediaItemIndex), SafeSelectClonedMediaItem(currentMediaItemIndex));
+                }
+                if (OnPreviousMediaItemChanged != null)
+                {
+                    OnPreviousMediaItemChanged(this, SafeSelectClonedMediaItem(oldpreviousMediaItemIndex), SafeSelectClonedMediaItem(previousMediaItemIndex));
+                }
+                if (OnNextMediaItemChanged != null)
+                {
+                    OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(oldnextMediaItemIndex), SafeSelectClonedMediaItem(nextMediaItemIndex));
                 }
             }
 
@@ -597,16 +641,29 @@ namespace CDR.LibRTMP.Media
             {
                 index = CalcShuffleMode_NextMediaItem(setRandomToCurrentMediaItem);
             }
-            else if (asCurrentIndex >= (playlist.Count - 1))
-            {
-                if (repeatMode == PlaylistRepeatMode.RepeatPlaylist)
-                {
-                    index = 0;
-                }
-            }
             else
             {
-                index = asCurrentIndex + 1;
+                int count = 0; // safety net when all items are set to skip!
+                int i = asCurrentIndex + 1;
+                while (playlist.Count > 0 && index == -1 && playlist.Count >= count)
+                {
+                    if (asCurrentIndex >= (playlist.Count - 1))
+                    {
+                        if (repeatMode == PlaylistRepeatMode.RepeatPlaylist && !playlist[0].SkipBecauseOfError)
+                        {
+                            index = 0;
+                            break;
+                        }
+                    }
+                    else if (!playlist[i].SkipBecauseOfError)
+                    {
+                        index = i;
+                        break;
+                    }
+
+                    count++;
+                    i++;
+                } //while
             }
 
             return index;
@@ -627,13 +684,13 @@ namespace CDR.LibRTMP.Media
             // Create list of mediaitems to select from
             int listCount = 0;
             int[] list = new int[playlist.Count];
-            while (listCount <= 0)
+            while (listCount <= 0 && playlist.Count > 0)
             {
                 listCount = 0;
                 int counter = 0;
                 foreach (MediaItem item in playlist)
                 {
-                    if ((counter != currentMediaItemIndex || (counter == currentMediaItemIndex && setRandomToCurrentMediaItem)) && !item._ShuffleDone)
+                    if ((counter != currentMediaItemIndex || (counter == currentMediaItemIndex && setRandomToCurrentMediaItem)) && !item._ShuffleDone && !item.SkipBecauseOfError)
                     {
                         list[listCount] = counter;
                         listCount++;
@@ -896,6 +953,28 @@ namespace CDR.LibRTMP.Media
                 InitVars();
                 playlistNumber--; // restore counter (possible because we use a lock here!)
                 this.playlistName = savedPlaylistName;
+            } // lock
+
+            // Fire event playlist has changed
+            if (OnPlaylistChanged != null)
+            {
+                OnPlaylistChanged(this, this);
+            }
+
+            // Do we need to fire an event that the previous MediaItem has changed?
+            if (OnCurrentMediaItemChanged != null)
+            {
+                OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(-1), SafeSelectClonedMediaItem(PreviousMediaItemIndex));
+            }
+            // Do we need to fire an event that the current MediaItem has changed?
+            if (OnCurrentMediaItemChanged != null)
+            {
+                OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(-1), SafeSelectClonedMediaItem(CurrentMediaItemIndex));
+            }
+            // Do we need to fire an event that the next MediaItem has changed?
+            if (OnNextMediaItemChanged != null)
+            {
+                OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(-1), SafeSelectClonedMediaItem(NextMediaItemIndex));
             }
         }
 
@@ -970,6 +1049,89 @@ namespace CDR.LibRTMP.Media
             } //lock
         }
 
+        public void MoveRow(int sourceIndex, int destinationIndex)
+        {
+            lock (lockVAR)
+            {
+                MediaItem item = playlist[sourceIndex];
+
+                int oldPreviousMediaItemIndex = PreviousMediaItemIndex;
+                int oldCurrentMediaItemIndex = CurrentMediaItemIndex;
+                int oldNextMediaItemIndex = NextMediaItemIndex;
+
+                int deleteAt = sourceIndex;
+                int insertAt = destinationIndex;
+                if (destinationIndex < sourceIndex)
+                {
+                    deleteAt++;
+                }
+                else
+                {
+                    insertAt++;
+                }
+
+                playlist.Insert(insertAt, item);
+                playlist.RemoveAt(deleteAt);
+
+                if (currentMediaItemIndex == sourceIndex)
+                {
+                    currentMediaItemIndex = destinationIndex;
+                    nextMediaItemIndex = -1;
+                    previousMediaItemIndex = -1;
+                }
+                else if (currentMediaItemIndex >= sourceIndex)
+                {
+                    currentMediaItemIndex--;
+                    nextMediaItemIndex = -1;
+                    previousMediaItemIndex = -1;
+                }
+                else if (currentMediaItemIndex >= destinationIndex)
+                {
+                    currentMediaItemIndex++;
+                    nextMediaItemIndex = -1;
+                    previousMediaItemIndex = -1;
+                }
+
+                // When going to 2 items a "next" has a new chance to become valid
+                if ((shuffleMode && playlist.Count == 2) || !shuffleMode || nextMediaItemIndex < 0)
+                {
+                    nextMediaItemIndex = CalcNextMediaItem(false);
+                }
+                if (!shuffleMode || previousMediaItemIndex < 0)
+                {
+                    // when not in shuflemode previous will not change in subsequent calc to CalcPreviousMediaItem as long 
+                    // as currentMediaItemIndex stays the same (content can off course change)
+                    previousMediaItemIndex = CalcPreviousMediaItem(currentMediaItemIndex);
+                }
+
+                int newPreviousMediaItemIndex = PreviousMediaItemIndex;
+                int newCurrentMediaItemIndex = CurrentMediaItemIndex;
+                int newNextMediaItemIndex = NextMediaItemIndex;
+
+                // Fire event playlist has changed
+                if (OnPlaylistChanged != null)
+                {
+                    OnPlaylistChanged(this, this);
+                }
+
+                // Do we need to fire an event that the previous MediaItem has changed?
+                if (OnCurrentMediaItemChanged != null)
+                {
+                    OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(oldPreviousMediaItemIndex), SafeSelectClonedMediaItem(newPreviousMediaItemIndex));
+                }
+                // Do we need to fire an event that the current MediaItem has changed?
+                if (OnCurrentMediaItemChanged != null)
+                {
+                    OnCurrentMediaItemChanged(this, SafeSelectClonedMediaItem(oldCurrentMediaItemIndex), SafeSelectClonedMediaItem(newCurrentMediaItemIndex));
+                }
+                // Do we need to fire an event that the next MediaItem has changed?
+                if (OnNextMediaItemChanged != null)
+                {
+                    OnNextMediaItemChanged(this, SafeSelectClonedMediaItem(oldNextMediaItemIndex), SafeSelectClonedMediaItem(newNextMediaItemIndex));
+                }
+            } //lock
+        }
+
         #endregion
 
 
@@ -1032,4 +1194,6 @@ namespace CDR.LibRTMP.Media
 
     // Playlist delegates
     public delegate void PL_OnMediaItemChanged(object sender, MediaItem oldMediaItem, MediaItem newMediaItem);
+
+    public delegate void PL_OnPlaylistChanged(object sender, Playlist playlist);
 }

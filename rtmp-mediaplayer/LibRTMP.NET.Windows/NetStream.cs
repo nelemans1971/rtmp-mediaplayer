@@ -122,6 +122,8 @@ namespace CDR.LibRTMP
         public RTMPPacket LastMediaPacket = null;
         private MemoryStream msAudioBuffer = null; // sse InitVars()
         private MemoryStream msVideoBuffer = null; // sse InitVars()
+        private byte[] lastAudioPacket = null;
+        private List<RTMPPacket> savedPackets = null; // Used after pause to recover from not found byte alignment
         private bool atBeginOfAudio = true; // for compress audio we need a minimum of data before you can begin to play (mp3 for example)
 
         private bool autoPlay = false; // only for user to start playing when data is received
@@ -129,6 +131,7 @@ namespace CDR.LibRTMP
 
         protected long mediaBytesReceived = 0;
         protected int blockMediaPackets = 0; // when playlist is running and we reset the list ("NetStream.Play.Switch") we wait until we get a "NetStream.Play.Start" before we deblock
+        private bool syncAfterPauseNeeded = false; // used to match up data packet after first packet arrives after an unpause (dirty fix to match up buffers byte wize)
         private bool pauseIsActive = false;
         private bool seekIsActive = false;
         private uint deltaTimeStampInMS = 0; // eg when a seek is done timestamps start at 0, but normaly you want to now the real position
@@ -228,10 +231,13 @@ namespace CDR.LibRTMP
                 LastMediaPacket = null;
                 msAudioBuffer = new MemoryStream(INITIAL_AUDIO_STREAMBUFFER);
                 msVideoBuffer = new MemoryStream();
+                lastAudioPacket = null;
+                savedPackets = null;
                 atBeginOfAudio = true; // for compress audio we need a minimum of data before you can begin to play (mp3 for example)
 
                 mediaBytesReceived = 0;
                 blockMediaPackets = 0; // when playlist is running and we reset the list ("NetStream.Play.Switch") we wait until we get a "NetStream.Play.Start" before we deblock
+                syncAfterPauseNeeded = false;
                 pauseIsActive = false;
                 seekIsActive = false;
                 deltaTimeStampInMS = 0;
@@ -788,6 +794,7 @@ namespace CDR.LibRTMP
                 case "NetStream.Play.Reset": // send when playlist starts at the beginning
                     lock (lockVAR)
                     {
+                        atBeginOfAudio = true;
                         mediaBytesReceived = 0;
                         deltaTimeStampInMS = 0;
                     } //lock
@@ -801,7 +808,6 @@ namespace CDR.LibRTMP
                     }
                     break;
                 case "NetStream.Data.Start":
-                    atBeginOfAudio = true;
                     mediaBytesReceived = 0;
                     break;
 
@@ -818,6 +824,7 @@ namespace CDR.LibRTMP
                     } //lock
                     break;
                 case "NetStream.Play.Stop":
+                    ReplaySavedPackets(); // needed in case packets where saved (we're at the end so a byte sync will not occure anymore)
                     lock (lockVAR)
                     {
                         atBeginOfAudio = true;
@@ -826,6 +833,7 @@ namespace CDR.LibRTMP
 
                 // Pause logic
                 case "NetStream.Pause.Notify":
+                    ReplaySavedPackets(); // needed in case packets where saved (we're at the end so a byte sync will not occure anymore)
                     lock (lockVAR)
                     {
                         if (mediaBytesReceived > 0) // we're buffering
@@ -845,6 +853,7 @@ namespace CDR.LibRTMP
                 case "NetStream.Unpause.Notify":
                     lock (lockVAR)
                     {
+                        syncAfterPauseNeeded = true;
                         pauseIsActive = false;
                         Internal_OnPauseStream(false);
                         if (OnPauseStream != null)
@@ -1058,9 +1067,10 @@ namespace CDR.LibRTMP
         {
             if (blockMediaPackets > 0)
             {
+                LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetStream.HandleOnMediaPacket] blockingMediaPacket Timestamp : {0}, Size : {0}", TimeSpan.FromMilliseconds(packet.TimeStamp), packet.BodySize));
                 return true;
             }
-            
+
             mediaChannel = packet.Channel; //need for pause to have lastest timestamp stored in NetConnection."channelTimestamp" 
 
             LastMediaPacket = packet;
@@ -1075,12 +1085,103 @@ namespace CDR.LibRTMP
                 }
 
                 // Store audio data in audio buffer
-                if (packet.BodySize > 0)
+                int offset = 1;
+                if (syncAfterPauseNeeded)
                 {
-                    msAudioBuffer.Write(packet.Body, 1, (int)packet.BodySize - 1);
-                    mediaBytesReceived += packet.BodySize;
+                    LibRTMPLogger.Log(LibRTMPLogLevel.Info, "[CDR.LibRTMP.NetStream.HandleOnMediaPacket] Unpause event code started");
+
+                    // Match last audio packet with this packet (must both be atleast 10 bytes big otherwhise match 
+                    // will be bad
+                    if (packet.BodySize > 10 && lastAudioPacket.Length > 10)
+                    {
+                        byte[] pattern = new byte[10];
+                        Buffer.BlockCopy(packet.Body, 1, pattern, 0, 10);
+                        LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetStream.HandleOnMediaPacket] Duplicate data, packetsize={0}", packet.BodySize - 1));
+
+                        int[] hits = lastAudioPacket.Locate(pattern);
+                        if (hits.Length > 0)
+                        {
+                            LibRTMPLogger.Log(LibRTMPLogLevel.Info, "[CDR.LibRTMP.NetStream.HandleOnMediaPacket] Duplicate data detected");
+                            // free data
+                            savedPackets = null;
+                            syncAfterPauseNeeded = false; // we're in sync
+
+                            // we only look at the first hit, and try to match it up with as much 
+                            // data as we have in "packet.body[1]" (this is start of pattern)
+                            int j = hits[0];
+                            // set offset so, it matches the entire packet!
+                            offset = (int)packet.BodySize - 1;
+                            for (int i = 1; i < packet.BodySize; i++)
+                            {
+                                if (j >= lastAudioPacket.Length || packet.Body[i] != lastAudioPacket[j])
+                                {
+                                    // New offset for packet data, where new data starts
+                                    offset = i;
+                                    // we're ready
+                                    break;
+                                }
+                                j++;
+                            } //for
+
+                            // remove unused data from lastAudioPacket (or all)
+                            if (offset >= (lastAudioPacket.Length - 1))
+                            {
+                                lastAudioPacket = null;
+                            }
+                            else
+                            {
+                                // there is some data left
+                                int left = (lastAudioPacket.Length - 1) - offset;
+                                byte[] leftB = new byte[left];
+                                Buffer.BlockCopy(lastAudioPacket, j, leftB, 0, left);
+                                // make sure we run this routine also for the next packet
+                                lock (lockVAR)
+                                {
+                                    syncAfterPauseNeeded = true;
+                                } //lock
+                            }
+
+                            LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetStream.HandleOnMediaPacket] Duplicate data detected up till offset:  {0}", offset));
+                        }
+                        else
+                        {
+                            LibRTMPLogger.Log(LibRTMPLogLevel.Info, "[CDR.LibRTMP.NetStream.HandleOnMediaPacket] NO Duplicate data detected");
+                            if (savedPackets == null)
+                            {
+                                savedPackets = new List<RTMPPacket>();
+                            }
+                            savedPackets.Add(packet);
+
+                            // After 10 packets received , just quit trying!
+                            if (savedPackets.Count >= 10)
+                            {
+                                ReplaySavedPackets();
+                            }
+                            
+                            return true;
+                        }
+                    }
+                } // if got unpause event
+
+                if (offset >= (int)packet.BodySize - 1)
+                {
+                    int newSize = (int)packet.BodySize - 1;
+                    LibRTMPLogger.Log(LibRTMPLogLevel.Info, string.Format("[CDR.LibRTMP.NetStream.HandleOnMediaPacket] Duplicate data, skipped entire packet (size={0})", newSize));
+                    // no data left to work with. so skip this packet
+                    return true;
                 }
 
+                msAudioBuffer.Write(packet.Body, offset, (int)packet.BodySize - offset);
+                mediaBytesReceived += packet.BodySize;
+
+                // lastAudioPacket is needed to rematch data after a pause (streaming server 
+                // seems to send the same packet and manipulation of position doesn't seem the fix it)
+                // small optimalization (most of the time packets are of the same size!
+                if (lastAudioPacket == null || lastAudioPacket.Length != (packet.BodySize - 1))
+                {
+                    lastAudioPacket = new byte[packet.BodySize - 1];
+                }
+                Buffer.BlockCopy(packet.Body, 1, lastAudioPacket, 0, (int)(packet.BodySize - 1));
 
                 if ((atBeginOfAudio && msAudioBuffer.Position >= 8192) || (!atBeginOfAudio && msAudioBuffer.Position > 0))
                 {
@@ -1116,7 +1217,11 @@ namespace CDR.LibRTMP
                 }
                 else
                 {
-                    // Store audio data in audio buffer
+                    // TODO
+                    // Probaly when using pause/unpause the first packet contains data which we already got
+                    // should check for this and repair as done in audio part
+
+                    // Store video data in buffer
                     msVideoBuffer.Write(packet.Body, 1, (int)packet.BodySize - 1);
 
                     if (OnVideoPacket != null)
@@ -1136,6 +1241,25 @@ namespace CDR.LibRTMP
             }
 
             return false;
+        }
+
+        private void ReplaySavedPackets()
+        {
+            // After 10 packets received , just quit trying!
+            if (savedPackets != null && savedPackets.Count > 0)
+            {
+                LibRTMPLogger.Log(LibRTMPLogLevel.Error, "[CDR.LibRTMP.NetStream.ReplaySavedPackets] Replay code running to save what we got!!!");
+
+                // Sync can not be found (or just reset it), replay previous packets
+                syncAfterPauseNeeded = false;
+                foreach (RTMPPacket packet in savedPackets)
+                {
+                    HandleOnMediaPacket(packet);
+                } //foreach
+
+            }
+            // free data
+            savedPackets = null;
         }
 
         #endregion
