@@ -28,7 +28,8 @@ namespace CDR.LibRTMP
 {
     public enum LibRTMPLogLevel
     {
-        Error = 0, // Highest
+        None = 0, // Off
+        Error, // Highest
         Warning,
         Info,
         Debug,
@@ -53,9 +54,10 @@ namespace CDR.LibRTMP
     /// </summary>
     public static class LibRTMPLogger
     {
-        private static LibRTMPLogLevel activeLogLevel = LibRTMPLogLevel.Error;
+        private static LibRTMPLogLevel activeLogLevel = LibRTMPLogLevel.None;
 
-        private static bool LogToFile = true;
+        private static bool logToFile = false;
+        private static bool logToOutput = false;
         private static object lockLogFile = new object();
         private static string LogFilename = "Log.log";
 
@@ -72,13 +74,41 @@ namespace CDR.LibRTMP
             }
         }
 
+        public static bool LogToFile
+        {
+            get
+            {
+                return logToFile;
+            }
+            set
+            {
+                logToFile = value;
+            }
+        }
+
+        public static bool LogToOutput
+        {
+            get
+            {
+                return logToOutput;
+            }
+            set
+            {
+                logToOutput = value;
+            }
+        }
+
         public static void Log(LibRTMPLogLevel logLevel, string message)
         {
-            if (Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(logLevel))
+#if !__ANDROID__
+            if (activeLogLevel != LibRTMPLogLevel.None && Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(logLevel))
             {
                 string line = string.Format("[{0}]: {1}", logLevel, message);
-                Console.WriteLine(line);
-
+                if (logToOutput)
+                {
+                    Console.WriteLine(line);
+                }
+#if !__IOS__
                 if (LogToFile)
                 {
                     lock (lockLogFile)
@@ -100,20 +130,25 @@ namespace CDR.LibRTMP
                         }
                     } //lock
                 }
+#endif
             }
+#endif
         }
 
         public static void LogError(Exception e)
         {
-            if (Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(LibRTMPLogLevel.Error))
+#if !__IOS__ && !__ANDROID__
+            if (activeLogLevel != LibRTMPLogLevel.None && Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(LibRTMPLogLevel.Error))
             {
                 Log(LibRTMPLogLevel.Error, e.Message);
             }
+#endif
         }
 
         public static void LogHex(LibRTMPLogLevel logLevel, byte[] array, int offset, int count)
         {
-            if (Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(logLevel))
+#if !__IOS__ && !__ANDROID__
+            if (activeLogLevel != LibRTMPLogLevel.None && Convert.ToInt32(activeLogLevel) >= Convert.ToInt32(logLevel))
             {
                 string result = string.Empty;
                 for (int i = offset; i < offset + count; i++)
@@ -130,6 +165,7 @@ namespace CDR.LibRTMP
                     Log(logLevel, result.Trim());
                 }
             }
+#endif
         }
     }
 }
