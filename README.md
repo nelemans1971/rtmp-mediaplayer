@@ -2,8 +2,6 @@
 =======================
 
 
-rtmp-mediaplayer is now hosted on github: github.com/nelemans1971/rtmp-mediaplayer
-
 =LibRTMP=
 
 LibRTMP is an open source C# api to connect to an rtmp server. It's mainly
